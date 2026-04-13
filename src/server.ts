@@ -16,8 +16,24 @@ async function start() {
 
   const port = Number(process.env.PORT || 8080);
   const frontendOrigin = process.env.FRONTEND_ORIGIN || "http://localhost:5173";
+  const extraOrigins = (process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 
-  app.use(cors({ origin: frontendOrigin, credentials: true }));
+  const allowedOrigins = Array.from(new Set([frontendOrigin, ...extraOrigins]));
+
+  app.use(cors({
+    origin: (origin, cb) => {
+      // Allow same-origin / server-to-server calls (no Origin header).
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error(`CORS blocked origin: ${origin}`));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }));
   app.use(express.json());
   app.use(morgan("dev"));
 
@@ -79,7 +95,7 @@ async function start() {
   const server = app.listen(port, () => {
     // eslint-disable-next-line no-console
     console.log(`Backend listening on http://localhost:${port}`);
-    console.log(`CORS allowed origin: ${frontendOrigin}`);
+    console.log(`CORS allowed origins: ${allowedOrigins.join(", ")}`);
   });
 
   const shutdown = async () => {
