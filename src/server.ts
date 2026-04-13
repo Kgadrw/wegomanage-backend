@@ -28,7 +28,9 @@ async function start() {
       // Allow same-origin / server-to-server calls (no Origin header).
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error(`CORS blocked origin: ${origin}`));
+      // eslint-disable-next-line no-console
+      console.warn(`CORS blocked origin: ${origin}`);
+      return cb(null, false);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
