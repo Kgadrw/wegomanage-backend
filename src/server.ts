@@ -21,7 +21,14 @@ async function start() {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  const allowedOrigins = Array.from(new Set([frontendOrigin, ...extraOrigins]));
+  // Sensible defaults so production works on Render without extra configuration.
+  // Override/extend anytime with FRONTEND_ORIGIN + CORS_ORIGINS.
+  const defaultOrigins = [
+    "http://localhost:5173",
+    "https://managment.wegoconnect.net",
+  ];
+
+  const allowedOrigins = Array.from(new Set([...defaultOrigins, frontendOrigin, ...extraOrigins]));
 
   app.use(cors({
     origin: (origin, cb) => {
