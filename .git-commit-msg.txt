@@ -1,3 +1,0 @@
-chore: initialize backend repository
-
-Separate backend into its own repository with sensible ignores and tracked source/config.
