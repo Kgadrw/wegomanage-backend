@@ -174,6 +174,11 @@ export function registerRoutes(app: Express, r: Repo) {
     res.json({ ok: true });
   });
 
+  // Me: current logged-in user info
+  app.get("/api/me", async (req, res) => {
+    res.json({ id: req.user!.id, email: req.user!.email });
+  });
+
   app.post("/api/email/test", async (req, res) => {
     const parsed = z.object({
       to: z.string().trim().email(),
@@ -201,40 +206,33 @@ export function registerRoutes(app: Express, r: Repo) {
     res.json({ usdToFrwRate });
   });
 
-  app.get("/api/profile", async (_req, res) => {
-    const [name, role, email, company, avatarUrl] = await Promise.all([
-      r.getSetting("profile_name"),
-      r.getSetting("profile_role"),
-      r.getSetting("profile_email"),
-      r.getSetting("profile_company"),
-      r.getSetting("profile_avatar_url"),
+  app.get("/api/profile", async (req, res) => {
+    const uid = req.user!.id;
+    const [name, role, company, avatarUrl] = await Promise.all([
+      r.getSetting(`profile_name:${uid}`),
+      r.getSetting(`profile_role:${uid}`),
+      r.getSetting(`profile_company:${uid}`),
+      r.getSetting(`profile_avatar_url:${uid}`),
     ]);
-    res.json({
-      name: name ?? "",
-      role: role ?? "",
-      email: email ?? "",
-      company: company ?? "",
-      avatarUrl: avatarUrl ?? "",
-    });
+    res.json({ name: name ?? "", role: role ?? "", company: company ?? "", avatarUrl: avatarUrl ?? "" });
   });
 
   app.put("/api/profile", async (req, res) => {
     const parsed = z.object({
       name: z.string().trim().min(1).max(80),
       role: z.string().trim().max(80).optional().default(""),
-      email: z.string().trim().email().max(120),
       company: z.string().trim().min(1).max(120),
       avatarUrl: z.string().trim().url().optional().or(z.literal("")).default(""),
     }).safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid profile" });
 
     const p = parsed.data;
+    const uid = req.user!.id;
     await Promise.all([
-      r.setSetting("profile_name", p.name),
-      r.setSetting("profile_role", p.role ?? ""),
-      r.setSetting("profile_email", p.email),
-      r.setSetting("profile_company", p.company),
-      r.setSetting("profile_avatar_url", p.avatarUrl ?? ""),
+      r.setSetting(`profile_name:${uid}`, p.name),
+      r.setSetting(`profile_role:${uid}`, p.role ?? ""),
+      r.setSetting(`profile_company:${uid}`, p.company),
+      r.setSetting(`profile_avatar_url:${uid}`, p.avatarUrl ?? ""),
     ]);
     res.json({ ok: true });
   });
