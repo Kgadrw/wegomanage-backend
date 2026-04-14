@@ -6,8 +6,9 @@ import { openDb, migrate } from "./db.js";
 import { registerRoutes } from "./routes.js";
 import { connectMongo, disconnectMongo } from "./mongo.js";
 import { mongoRepo, sqliteRepo } from "./repo.js";
-import { requireAuth } from "./auth.js";
+import { hashPassword, requireAuth } from "./auth.js";
 import { startEmailAutomation } from "./automation.js";
+import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
@@ -80,6 +81,27 @@ async function start() {
     const db = openDb();
     migrate(db);
     repo = sqliteRepo(db);
+  }
+
+  // Reset admin login credentials from env (optional).
+  // Useful if you changed credentials and want to set a new known default.
+  if (String(process.env.ADMIN_RESET_DEFAULT || "").toLowerCase() === "true") {
+    const email = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+    const password = (process.env.ADMIN_PASSWORD || "").trim();
+    if (!email || !password) {
+      // eslint-disable-next-line no-console
+      console.warn("ADMIN_RESET_DEFAULT=true but ADMIN_EMAIL/ADMIN_PASSWORD are not set");
+    } else {
+      const salt = randomUUID();
+      const hash = hashPassword(password, salt);
+      await Promise.all([
+        repo.setSetting("admin_email", email),
+        repo.setSetting("admin_password_salt", salt),
+        repo.setSetting("admin_password_hash", hash),
+      ]);
+      // eslint-disable-next-line no-console
+      console.log("Admin login credentials reset from env");
+    }
   }
 
   app.get("/health", (_req, res) => {
