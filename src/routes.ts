@@ -22,7 +22,7 @@ export function registerRoutes(app: Express, r: Repo) {
   app.post("/api/auth/login", async (req, res) => {
     const parsed = z.object({
       email: z.string().trim().email(),
-      password: z.string().min(1),
+      password: z.string().trim().min(1),
     }).safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid credentials" });
 
@@ -34,7 +34,7 @@ export function registerRoutes(app: Express, r: Repo) {
     const envPassword = process.env.ADMIN_PASSWORD || "";
 
     const inputEmail = parsed.data.email.trim().toLowerCase();
-    const inputPassword = parsed.data.password;
+    const inputPassword = parsed.data.password.trim();
 
     // Primary: DB-stored credentials (if present).
     const dbOk = Boolean(
@@ -65,9 +65,9 @@ export function registerRoutes(app: Express, r: Repo) {
 
   app.put("/api/admin/credentials", async (req, res) => {
     const parsed = z.object({
-      currentPassword: z.string().min(1),
+      currentPassword: z.string().trim().min(1),
       newEmail: z.string().trim().email(),
-      newPassword: z.string().min(6),
+      newPassword: z.string().trim().min(6),
     }).safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
 
@@ -76,14 +76,15 @@ export function registerRoutes(app: Express, r: Repo) {
     const envPassword = process.env.ADMIN_PASSWORD || "";
 
     const hasDbCreds = Boolean(storedSalt && storedHash);
+    const currentPassword = parsed.data.currentPassword.trim();
     const currentOk = hasDbCreds
-      ? verifyPassword(parsed.data.currentPassword, storedSalt, storedHash)
-      : Boolean(envPassword && parsed.data.currentPassword === envPassword);
+      ? verifyPassword(currentPassword, storedSalt, storedHash)
+      : Boolean(envPassword && currentPassword === envPassword);
 
     if (!currentOk) return res.status(401).json({ error: "Invalid current password" });
 
     const salt = randomUUID();
-    const hash = hashPassword(parsed.data.newPassword, salt);
+    const hash = hashPassword(parsed.data.newPassword.trim(), salt);
     await Promise.all([
       r.setSetting("admin_email", parsed.data.newEmail.trim().toLowerCase()),
       r.setSetting("admin_password_salt", salt),
