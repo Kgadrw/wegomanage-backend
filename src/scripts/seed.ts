@@ -11,22 +11,22 @@ const r = sqliteRepo(db);
 
 for (const p of seedProducts) {
   db.prepare(
-    `INSERT OR IGNORE INTO products(id,name,category,vendor,purchaseDate,purchaseCost,warrantyExpiry,serialNumber,assignedTo,status,notes,createdAt)
-     VALUES(@id,@name,@category,@vendor,@purchaseDate,@purchaseCost,@warrantyExpiry,@serialNumber,@assignedTo,@status,@notes,@createdAt)`,
+    `INSERT OR IGNORE INTO products(id,userId,name,category,vendor,purchaseDate,purchaseCost,warrantyExpiry,serialNumber,assignedTo,status,notes,createdAt)
+     VALUES(@id,@userId,@name,@category,@vendor,@purchaseDate,@purchaseCost,@warrantyExpiry,@serialNumber,@assignedTo,@status,@notes,@createdAt)`,
   ).run(p);
 }
 
 for (const s of seedSubscriptions) {
   db.prepare(
-    `INSERT OR IGNORE INTO subscriptions(id,name,provider,planType,amount,billingCycle,startDate,renewalDate,paymentMethod,status,reminderDaysBefore,payerName,payerEmail,notes,createdAt)
-     VALUES(@id,@name,@provider,@planType,@amount,@billingCycle,@startDate,@renewalDate,@paymentMethod,@status,@reminderDaysBefore,@payerName,@payerEmail,@notes,@createdAt)`,
+    `INSERT OR IGNORE INTO subscriptions(id,userId,name,provider,planType,amount,billingCycle,startDate,renewalDate,paymentMethod,status,reminderDaysBefore,payerName,payerEmail,notes,createdAt)
+     VALUES(@id,@userId,@name,@provider,@planType,@amount,@billingCycle,@startDate,@renewalDate,@paymentMethod,@status,@reminderDaysBefore,@payerName,@payerEmail,@notes,@createdAt)`,
   ).run(s);
 }
 
 for (const rr of seedRentRecords) {
   db.prepare(
-    `INSERT OR IGNORE INTO rent_records(id,title,propertyType,contactName,rentAmount,paymentFrequency,dueDate,contractStartDate,contractEndDate,status,payerName,payerEmail,notes,createdAt)
-     VALUES(@id,@title,@propertyType,@contactName,@rentAmount,@paymentFrequency,@dueDate,@contractStartDate,@contractEndDate,@status,@payerName,@payerEmail,@notes,@createdAt)`,
+    `INSERT OR IGNORE INTO rent_records(id,userId,title,propertyType,contactName,rentAmount,paymentFrequency,dueDate,contractStartDate,contractEndDate,status,payerName,payerEmail,notes,createdAt)
+     VALUES(@id,@userId,@title,@propertyType,@contactName,@rentAmount,@paymentFrequency,@dueDate,@contractStartDate,@contractEndDate,@status,@payerName,@payerEmail,@notes,@createdAt)`,
   ).run(rr);
 }
 

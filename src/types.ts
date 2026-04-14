@@ -11,6 +11,7 @@ export type RecordStatus =
 
 export interface Product {
   id: string;
+  userId: string;
   name: string;
   category: string;
   vendor: string;
@@ -26,6 +27,7 @@ export interface Product {
 
 export interface Subscription {
   id: string;
+  userId: string;
   name: string;
   provider: string;
   planType: string;
@@ -44,6 +46,7 @@ export interface Subscription {
 
 export interface RentRecord {
   id: string;
+  userId: string;
   title: string;
   propertyType: string;
   contactName: string;
@@ -61,6 +64,7 @@ export interface RentRecord {
 
 export interface Reminder {
   id: string;
+  userId: string;
   title: string;
   relatedType: "product" | "subscription" | "rent" | "general";
   relatedId: string | null;
@@ -73,9 +77,18 @@ export interface Reminder {
 
 export interface ActivityLog {
   id: string;
+  userId: string;
   action: string;
   recordType: string;
   recordName: string;
   timestamp: string;
+}
+
+export interface User {
+  id: string;
+  email: string;
+  passwordSalt: string;
+  passwordHash: string;
+  createdAt: string;
 }
 

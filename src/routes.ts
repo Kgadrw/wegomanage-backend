@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { z } from "zod";
 import type { Repo } from "./repo.js";
-import { hashPassword, issueToken, revokeAllTokens, revokeToken, verifyPassword } from "./auth.js";
+import { hashPassword, issueAccessToken, sha256Hex, verifyPassword } from "./auth.js";
 import { randomUUID } from "node:crypto";
 import { sendMail } from "./mailer.js";
 import { runEmailAutomationOnce } from "./automation.js";
@@ -19,6 +19,32 @@ import { isBeforeToday, isWithinNextDays } from "./lib/time.js";
 
 export function registerRoutes(app: Express, r: Repo) {
 
+  // Auth: register
+  app.post("/api/auth/register", async (req, res) => {
+    const parsed = z.object({
+      email: z.string().trim().email(),
+      password: z.string().trim().min(6),
+    }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
+
+    const email = parsed.data.email.trim().toLowerCase();
+    const existing = await r.getUserByEmail(email);
+    if (existing) return res.status(409).json({ error: "Email already in use" });
+
+    const salt = randomUUID();
+    const hash = hashPassword(parsed.data.password.trim(), salt);
+    const user = await r.createUser({ email, passwordSalt: salt, passwordHash: hash });
+
+    const accessToken = await issueAccessToken({ id: user.id, email: user.email });
+    const refreshToken = randomUUID();
+    const refreshHash = sha256Hex(refreshToken);
+    const days = Number(process.env.JWT_REFRESH_TTL_DAYS || 30);
+    const expiresAt = new Date(Date.now() + Math.max(1, days) * 86400_000).toISOString();
+    await r.createRefreshToken({ userId: user.id, tokenHash: refreshHash, expiresAt });
+
+    res.json({ accessToken, refreshToken });
+  });
+
   app.post("/api/auth/login", async (req, res) => {
     const parsed = z.object({
       email: z.string().trim().email(),
@@ -26,82 +52,126 @@ export function registerRoutes(app: Express, r: Repo) {
     }).safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid credentials" });
 
-    const storedEmail = (await r.getSetting("admin_email"))?.trim().toLowerCase() || "";
-    const storedSalt = (await r.getSetting("admin_password_salt")) || "";
-    const storedHash = (await r.getSetting("admin_password_hash")) || "";
-
-    const envEmail = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
-    const envPassword = process.env.ADMIN_PASSWORD || "";
-
     const inputEmail = parsed.data.email.trim().toLowerCase();
     const inputPassword = parsed.data.password.trim();
 
-    // Primary: DB-stored credentials (if present).
-    const dbOk = Boolean(
-      storedEmail &&
-      storedSalt &&
-      storedHash &&
-      inputEmail === storedEmail &&
-      verifyPassword(inputPassword, storedSalt, storedHash),
-    );
-
-    // Also allow env credentials (same behavior as local dev when ADMIN_* is set).
-    const envOk = Boolean(envEmail && envPassword && inputEmail === envEmail && inputPassword === envPassword);
-
-    const ok = dbOk || envOk;
-
+    const user = await r.getUserByEmail(inputEmail);
+    if (!user) return res.status(401).json({ error: "Invalid credentials" });
+    const ok = verifyPassword(inputPassword, user.passwordSalt, user.passwordHash);
     if (!ok) return res.status(401).json({ error: "Invalid credentials" });
 
-    const token = issueToken();
-    res.json({ token });
+    const accessToken = await issueAccessToken({ id: user.id, email: user.email });
+    const refreshToken = randomUUID();
+    const refreshHash = sha256Hex(refreshToken);
+    const days = Number(process.env.JWT_REFRESH_TTL_DAYS || 30);
+    const expiresAt = new Date(Date.now() + Math.max(1, days) * 86400_000).toISOString();
+    await r.createRefreshToken({ userId: user.id, tokenHash: refreshHash, expiresAt });
+
+    res.json({ accessToken, refreshToken });
   });
 
-  app.post("/api/auth/logout", async (req, res) => {
-    const parsed = z.object({ token: z.string().min(1) }).safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "Invalid token" });
-    revokeToken(parsed.data.token);
-    res.json({ ok: true });
+  // Auth: forgot password (send 6-digit code)
+  app.post("/api/auth/forgot-password", async (req, res) => {
+    const parsed = z.object({ email: z.string().trim().email() }).safeParse(req.body);
+    if (!parsed.success) return res.status(200).json({ ok: true });
+    const email = parsed.data.email.trim().toLowerCase();
+    const user = await r.getUserByEmail(email);
+    if (!user) return res.status(200).json({ ok: true });
+
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const codeHash = sha256Hex(code);
+    const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+    await r.createPasswordResetCode({ userId: user.id, codeHash, expiresAt });
+
+    await sendMail({
+      to: user.email,
+      subject: "WegoConnect password reset code",
+      text: `Your WegoConnect password reset code is: ${code}\n\nThis code expires in 15 minutes.`,
+      html: `<p>Your WegoConnect password reset code is:</p><p style="font-size:20px;font-weight:700;letter-spacing:2px;">${code}</p><p>This code expires in 15 minutes.</p>`,
+    });
+
+    return res.json({ ok: true });
   });
 
-  app.put("/api/admin/credentials", async (req, res) => {
+  // Auth: reset password (verify code)
+  app.post("/api/auth/reset-password", async (req, res) => {
     const parsed = z.object({
-      currentPassword: z.string().trim().min(1),
-      newEmail: z.string().trim().email(),
+      email: z.string().trim().email(),
+      code: z.string().trim().min(6).max(6),
       newPassword: z.string().trim().min(6),
     }).safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
 
-    const storedSalt = (await r.getSetting("admin_password_salt")) || "";
-    const storedHash = (await r.getSetting("admin_password_hash")) || "";
-    const envPassword = process.env.ADMIN_PASSWORD || "";
+    const email = parsed.data.email.trim().toLowerCase();
+    const user = await r.getUserByEmail(email);
+    if (!user) return res.status(400).json({ error: "Invalid code" });
 
-    const hasDbCreds = Boolean(storedSalt && storedHash);
-    const currentPassword = parsed.data.currentPassword.trim();
-    const currentOk = hasDbCreds
-      ? verifyPassword(currentPassword, storedSalt, storedHash)
-      : Boolean(envPassword && currentPassword === envPassword);
-
-    if (!currentOk) return res.status(401).json({ error: "Invalid current password" });
+    const ok = await r.consumePasswordResetCode({ userId: user.id, codeHash: sha256Hex(parsed.data.code) });
+    if (!ok) return res.status(400).json({ error: "Invalid code" });
 
     const salt = randomUUID();
     const hash = hashPassword(parsed.data.newPassword.trim(), salt);
-    await Promise.all([
-      r.setSetting("admin_email", parsed.data.newEmail.trim().toLowerCase()),
-      r.setSetting("admin_password_salt", salt),
-      r.setSetting("admin_password_hash", hash),
-    ]);
+    await r.updateUserCredentials(user.id, { passwordSalt: salt, passwordHash: hash });
+    await r.revokeAllRefreshTokensForUser(user.id);
+    return res.json({ ok: true });
+  });
 
-    // Force re-login everywhere (simple global revoke).
-    revokeAllTokens();
+  // Auth: refresh access token
+  app.post("/api/auth/refresh", async (req, res) => {
+    const parsed = z.object({ refreshToken: z.string().min(1) }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
+    const refreshHash = sha256Hex(parsed.data.refreshToken);
+    const row = await r.getRefreshTokenByHash(refreshHash);
+    if (!row) return res.status(401).json({ error: "Invalid refresh token" });
+    if (row.revokedAt) return res.status(401).json({ error: "Invalid refresh token" });
+    if (row.expiresAt <= new Date().toISOString()) return res.status(401).json({ error: "Invalid refresh token" });
+
+    const user = await r.getUserById(row.userId);
+    if (!user) return res.status(401).json({ error: "Invalid refresh token" });
+
+    const accessToken = await issueAccessToken({ id: user.id, email: user.email });
+    res.json({ accessToken });
+  });
+
+  // Auth: logout (revoke refresh token)
+  app.post("/api/auth/logout", async (req, res) => {
+    const parsed = z.object({ refreshToken: z.string().min(1) }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
+    await r.revokeRefreshTokenByHash(sha256Hex(parsed.data.refreshToken));
     res.json({ ok: true });
   });
 
-  // Admin login email (do not expose password/hash).
-  app.get("/api/admin/credentials", async (_req, res) => {
-    const storedEmail = (await r.getSetting("admin_email")) || "";
-    const envEmail = process.env.ADMIN_EMAIL || "";
-    const email = (storedEmail || envEmail).trim().toLowerCase();
-    res.json({ email });
+  // Legacy admin endpoints will be replaced by /api/me/credentials in a later step.
+
+  // Me: update my login credentials (email/password)
+  app.put("/api/me/credentials", async (req, res) => {
+    const parsed = z.object({
+      currentPassword: z.string().trim().min(1),
+      newEmail: z.string().trim().email().optional(),
+      newPassword: z.string().trim().min(6).optional(),
+    }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
+
+    const userId = req.user!.id;
+    const user = await r.getUserById(userId);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const ok = verifyPassword(parsed.data.currentPassword.trim(), user.passwordSalt, user.passwordHash);
+    if (!ok) return res.status(401).json({ error: "Invalid current password" });
+
+    const patch: { email?: string; passwordSalt?: string; passwordHash?: string } = {};
+    if (parsed.data.newEmail) patch.email = parsed.data.newEmail.trim().toLowerCase();
+    if (parsed.data.newPassword) {
+      const salt = randomUUID();
+      const hash = hashPassword(parsed.data.newPassword.trim(), salt);
+      patch.passwordSalt = salt;
+      patch.passwordHash = hash;
+    }
+
+    const updated = await r.updateUserCredentials(userId, patch);
+    if (!updated) return res.status(500).json({ error: "Failed to update credentials" });
+    await r.revokeAllRefreshTokensForUser(userId);
+    res.json({ ok: true });
   });
 
   app.post("/api/email/test", async (req, res) => {
@@ -177,142 +247,143 @@ export function registerRoutes(app: Express, r: Repo) {
   });
 
   // Products
-  app.get("/api/products", async (_req, res) => res.json(await r.listProducts()));
+  app.get("/api/products", async (req, res) => res.json(await r.listProducts(req.user!.id)));
   app.get("/api/products/:id", async (req, res) => {
-    const item = await r.getProduct(req.params.id);
+    const item = await r.getProduct(req.user!.id, req.params.id);
     if (!item) return res.status(404).json({ error: "Not found" });
     res.json(item);
   });
   app.post("/api/products", async (req, res) => {
     const parsed = productCreateSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
-    const created = await r.createProduct(parsed.data);
-    await r.addActivity({ action: "created", recordType: "product", recordName: created.name });
+    const created = await r.createProduct(req.user!.id, parsed.data);
+    await r.addActivity(req.user!.id, { action: "created", recordType: "product", recordName: created.name });
     res.status(201).json(created);
   });
   app.put("/api/products/:id", async (req, res) => {
     const parsed = productUpdateSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
-    const updated = await r.updateProduct(req.params.id, parsed.data);
+    const updated = await r.updateProduct(req.user!.id, req.params.id, parsed.data);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    await r.addActivity({ action: "updated", recordType: "product", recordName: updated.name });
+    await r.addActivity(req.user!.id, { action: "updated", recordType: "product", recordName: updated.name });
     res.json(updated);
   });
   app.delete("/api/products/:id", async (req, res) => {
-    const cur = await r.getProduct(req.params.id);
-    const ok = await r.deleteProduct(req.params.id);
+    const cur = await r.getProduct(req.user!.id, req.params.id);
+    const ok = await r.deleteProduct(req.user!.id, req.params.id);
     if (!ok) return res.status(404).json({ error: "Not found" });
-    if (cur) await r.addActivity({ action: "deleted", recordType: "product", recordName: cur.name });
+    if (cur) await r.addActivity(req.user!.id, { action: "deleted", recordType: "product", recordName: cur.name });
     res.json({ ok: true });
   });
 
   // Subscriptions
-  app.get("/api/subscriptions", async (_req, res) => res.json(await r.listSubscriptions()));
+  app.get("/api/subscriptions", async (req, res) => res.json(await r.listSubscriptions(req.user!.id)));
   app.get("/api/subscriptions/:id", async (req, res) => {
-    const item = await r.getSubscription(req.params.id);
+    const item = await r.getSubscription(req.user!.id, req.params.id);
     if (!item) return res.status(404).json({ error: "Not found" });
     res.json(item);
   });
   app.post("/api/subscriptions", async (req, res) => {
     const parsed = subscriptionCreateSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
-    const created = await r.createSubscription(parsed.data);
-    await r.addActivity({ action: "created", recordType: "subscription", recordName: created.name });
+    const created = await r.createSubscription(req.user!.id, parsed.data);
+    await r.addActivity(req.user!.id, { action: "created", recordType: "subscription", recordName: created.name });
     void runEmailAutomationOnce(r).catch((e) => console.error("email automation failed after create subscription", e));
     res.status(201).json(created);
   });
   app.put("/api/subscriptions/:id", async (req, res) => {
     const parsed = subscriptionUpdateSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
-    const updated = await r.updateSubscription(req.params.id, parsed.data);
+    const updated = await r.updateSubscription(req.user!.id, req.params.id, parsed.data);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    await r.addActivity({ action: "updated", recordType: "subscription", recordName: updated.name });
+    await r.addActivity(req.user!.id, { action: "updated", recordType: "subscription", recordName: updated.name });
     void runEmailAutomationOnce(r).catch((e) => console.error("email automation failed after update subscription", e));
     res.json(updated);
   });
   app.delete("/api/subscriptions/:id", async (req, res) => {
-    const cur = await r.getSubscription(req.params.id);
-    const ok = await r.deleteSubscription(req.params.id);
+    const cur = await r.getSubscription(req.user!.id, req.params.id);
+    const ok = await r.deleteSubscription(req.user!.id, req.params.id);
     if (!ok) return res.status(404).json({ error: "Not found" });
-    if (cur) await r.addActivity({ action: "deleted", recordType: "subscription", recordName: cur.name });
+    if (cur) await r.addActivity(req.user!.id, { action: "deleted", recordType: "subscription", recordName: cur.name });
     void runEmailAutomationOnce(r).catch((e) => console.error("email automation failed after delete subscription", e));
     res.json({ ok: true });
   });
 
   // Rent records
-  app.get("/api/rent-records", async (_req, res) => res.json(await r.listRentRecords()));
+  app.get("/api/rent-records", async (req, res) => res.json(await r.listRentRecords(req.user!.id)));
   app.get("/api/rent-records/:id", async (req, res) => {
-    const item = await r.getRentRecord(req.params.id);
+    const item = await r.getRentRecord(req.user!.id, req.params.id);
     if (!item) return res.status(404).json({ error: "Not found" });
     res.json(item);
   });
   app.post("/api/rent-records", async (req, res) => {
     const parsed = rentRecordCreateSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
-    const created = await r.createRentRecord(parsed.data);
-    await r.addActivity({ action: "created", recordType: "rent", recordName: created.title });
+    const created = await r.createRentRecord(req.user!.id, parsed.data);
+    await r.addActivity(req.user!.id, { action: "created", recordType: "rent", recordName: created.title });
     void runEmailAutomationOnce(r).catch((e) => console.error("email automation failed after create rent record", e));
     res.status(201).json(created);
   });
   app.put("/api/rent-records/:id", async (req, res) => {
     const parsed = rentRecordUpdateSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
-    const updated = await r.updateRentRecord(req.params.id, parsed.data);
+    const updated = await r.updateRentRecord(req.user!.id, req.params.id, parsed.data);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    await r.addActivity({ action: "updated", recordType: "rent", recordName: updated.title });
+    await r.addActivity(req.user!.id, { action: "updated", recordType: "rent", recordName: updated.title });
     void runEmailAutomationOnce(r).catch((e) => console.error("email automation failed after update rent record", e));
     res.json(updated);
   });
   app.delete("/api/rent-records/:id", async (req, res) => {
-    const cur = await r.getRentRecord(req.params.id);
-    const ok = await r.deleteRentRecord(req.params.id);
+    const cur = await r.getRentRecord(req.user!.id, req.params.id);
+    const ok = await r.deleteRentRecord(req.user!.id, req.params.id);
     if (!ok) return res.status(404).json({ error: "Not found" });
-    if (cur) await r.addActivity({ action: "deleted", recordType: "rent", recordName: cur.title });
+    if (cur) await r.addActivity(req.user!.id, { action: "deleted", recordType: "rent", recordName: cur.title });
     void runEmailAutomationOnce(r).catch((e) => console.error("email automation failed after delete rent record", e));
     res.json({ ok: true });
   });
 
   // Reminders
-  app.get("/api/reminders", async (_req, res) => res.json(await r.listReminders()));
+  app.get("/api/reminders", async (req, res) => res.json(await r.listReminders(req.user!.id)));
   app.get("/api/reminders/:id", async (req, res) => {
-    const item = await r.getReminder(req.params.id);
+    const item = await r.getReminder(req.user!.id, req.params.id);
     if (!item) return res.status(404).json({ error: "Not found" });
     res.json(item);
   });
   app.post("/api/reminders", async (req, res) => {
     const parsed = reminderCreateSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
-    const created = await r.createReminder(parsed.data);
-    await r.addActivity({ action: "created", recordType: "reminder", recordName: created.title });
+    const created = await r.createReminder(req.user!.id, parsed.data);
+    await r.addActivity(req.user!.id, { action: "created", recordType: "reminder", recordName: created.title });
     void runEmailAutomationOnce(r).catch((e) => console.error("email automation failed after create reminder", e));
     res.status(201).json(created);
   });
   app.put("/api/reminders/:id", async (req, res) => {
     const parsed = reminderUpdateSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
-    const updated = await r.updateReminder(req.params.id, parsed.data);
+    const updated = await r.updateReminder(req.user!.id, req.params.id, parsed.data);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    await r.addActivity({ action: "updated", recordType: "reminder", recordName: updated.title });
+    await r.addActivity(req.user!.id, { action: "updated", recordType: "reminder", recordName: updated.title });
     void runEmailAutomationOnce(r).catch((e) => console.error("email automation failed after update reminder", e));
     res.json(updated);
   });
   app.delete("/api/reminders/:id", async (req, res) => {
-    const cur = await r.getReminder(req.params.id);
-    const ok = await r.deleteReminder(req.params.id);
+    const cur = await r.getReminder(req.user!.id, req.params.id);
+    const ok = await r.deleteReminder(req.user!.id, req.params.id);
     if (!ok) return res.status(404).json({ error: "Not found" });
-    if (cur) await r.addActivity({ action: "deleted", recordType: "reminder", recordName: cur.title });
+    if (cur) await r.addActivity(req.user!.id, { action: "deleted", recordType: "reminder", recordName: cur.title });
     void runEmailAutomationOnce(r).catch((e) => console.error("email automation failed after delete reminder", e));
     res.json({ ok: true });
   });
 
   // Activity log
-  app.get("/api/activity", async (_req, res) => res.json(await r.listActivity()));
+  app.get("/api/activity", async (req, res) => res.json(await r.listActivity(req.user!.id)));
 
   // Notifications aggregate (same idea as frontend NotificationCenter)
   app.get("/api/notifications", async (_req, res) => {
-    const reminders = await r.listReminders();
-    const subscriptions = await r.listSubscriptions();
-    const rent = await r.listRentRecords();
+    const userId = _req.user!.id;
+    const reminders = await r.listReminders(userId);
+    const subscriptions = await r.listSubscriptions(userId);
+    const rent = await r.listRentRecords(userId);
 
     const upcomingReminders = reminders.filter((x) => x.status === "pending" && isWithinNextDays(x.reminderDate, 7));
     const overdueReminders = reminders.filter((x) => x.status === "overdue" || (x.status === "pending" && isBeforeToday(x.reminderDate)));

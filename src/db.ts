@@ -20,8 +20,43 @@ export function openDb(): Db {
 
 export function migrate(db: Db) {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      passwordSalt TEXT NOT NULL,
+      passwordHash TEXT NOT NULL,
+      createdAt TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS refresh_tokens (
+      id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL,
+      tokenHash TEXT NOT NULL,
+      expiresAt TEXT NOT NULL,
+      createdAt TEXT NOT NULL,
+      revokedAt TEXT,
+      FOREIGN KEY(userId) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_refresh_tokens_userId ON refresh_tokens(userId);
+    CREATE INDEX IF NOT EXISTS idx_refresh_tokens_tokenHash ON refresh_tokens(tokenHash);
+
+    CREATE TABLE IF NOT EXISTS password_reset_codes (
+      id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL,
+      codeHash TEXT NOT NULL,
+      expiresAt TEXT NOT NULL,
+      createdAt TEXT NOT NULL,
+      usedAt TEXT,
+      FOREIGN KEY(userId) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_password_reset_codes_userId ON password_reset_codes(userId);
+    CREATE INDEX IF NOT EXISTS idx_password_reset_codes_codeHash ON password_reset_codes(codeHash);
+
     CREATE TABLE IF NOT EXISTS products (
       id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL,
       name TEXT NOT NULL,
       category TEXT NOT NULL,
       vendor TEXT NOT NULL,
@@ -37,6 +72,7 @@ export function migrate(db: Db) {
 
     CREATE TABLE IF NOT EXISTS subscriptions (
       id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL,
       name TEXT NOT NULL,
       provider TEXT NOT NULL,
       planType TEXT NOT NULL,
@@ -55,6 +91,7 @@ export function migrate(db: Db) {
 
     CREATE TABLE IF NOT EXISTS rent_records (
       id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL,
       title TEXT NOT NULL,
       propertyType TEXT NOT NULL,
       contactName TEXT NOT NULL,
@@ -72,6 +109,7 @@ export function migrate(db: Db) {
 
     CREATE TABLE IF NOT EXISTS reminders (
       id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL,
       title TEXT NOT NULL,
       relatedType TEXT NOT NULL,
       relatedId TEXT,
@@ -84,6 +122,7 @@ export function migrate(db: Db) {
 
     CREATE TABLE IF NOT EXISTS activity_log (
       id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL,
       action TEXT NOT NULL,
       recordType TEXT NOT NULL,
       recordName TEXT NOT NULL,
@@ -107,5 +146,11 @@ export function migrate(db: Db) {
   addColumnIfMissing("subscriptions", "payerName", "payerName TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing("rent_records", "payerEmail", "payerEmail TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing("rent_records", "payerName", "payerName TEXT NOT NULL DEFAULT ''");
+
+  addColumnIfMissing("products", "userId", "userId TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing("subscriptions", "userId", "userId TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing("rent_records", "userId", "userId TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing("reminders", "userId", "userId TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing("activity_log", "userId", "userId TEXT NOT NULL DEFAULT ''");
 }
 

@@ -14,6 +14,7 @@ export const recordStatusSchema = z.enum([
 
 export const productSchema = z.object({
   id: z.string().min(1),
+  userId: z.string().min(1),
   name: z.string().min(1),
   category: z.string().min(1),
   vendor: z.string().min(1),
@@ -27,11 +28,12 @@ export const productSchema = z.object({
   createdAt: z.string().min(1),
 });
 
-export const productCreateSchema = productSchema.omit({ id: true, createdAt: true });
+export const productCreateSchema = productSchema.omit({ id: true, createdAt: true, userId: true });
 export const productUpdateSchema = productCreateSchema.partial();
 
 export const subscriptionSchema = z.object({
   id: z.string().min(1),
+  userId: z.string().min(1),
   name: z.string().min(1),
   provider: z.string().min(1),
   planType: z.string().min(1),
@@ -48,11 +50,12 @@ export const subscriptionSchema = z.object({
   createdAt: z.string().min(1),
 });
 
-export const subscriptionCreateSchema = subscriptionSchema.omit({ id: true, createdAt: true });
+export const subscriptionCreateSchema = subscriptionSchema.omit({ id: true, createdAt: true, userId: true });
 export const subscriptionUpdateSchema = subscriptionCreateSchema.partial();
 
 export const rentRecordSchema = z.object({
   id: z.string().min(1),
+  userId: z.string().min(1),
   title: z.string().min(1),
   propertyType: z.string().min(1),
   contactName: z.string().min(1),
@@ -68,11 +71,12 @@ export const rentRecordSchema = z.object({
   createdAt: z.string().min(1),
 });
 
-export const rentRecordCreateSchema = rentRecordSchema.omit({ id: true, createdAt: true });
+export const rentRecordCreateSchema = rentRecordSchema.omit({ id: true, createdAt: true, userId: true });
 export const rentRecordUpdateSchema = rentRecordCreateSchema.partial();
 
 export const reminderSchema = z.object({
   id: z.string().min(1),
+  userId: z.string().min(1),
   title: z.string().min(1),
   relatedType: z.enum(["product", "subscription", "rent", "general"]),
   relatedId: z.string().nullable(),
@@ -83,6 +87,6 @@ export const reminderSchema = z.object({
   createdAt: z.string().min(1),
 });
 
-export const reminderCreateSchema = reminderSchema.omit({ id: true, createdAt: true });
+export const reminderCreateSchema = reminderSchema.omit({ id: true, createdAt: true, userId: true });
 export const reminderUpdateSchema = reminderCreateSchema.partial();
 

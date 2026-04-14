@@ -58,9 +58,9 @@ export async function buildAlertsEmail(r: Repo): Promise<AlertEmail | null> {
   const [profileEmail, profileName, reminders, subs, rent] = await Promise.all([
     r.getSetting("profile_email"),
     r.getSetting("profile_name"),
-    r.listReminders(),
-    r.listSubscriptions(),
-    r.listRentRecords(),
+    r.listReminders(""),
+    r.listSubscriptions(""),
+    r.listRentRecords(""),
   ]);
 
   const to = (profileEmail || "").trim();
@@ -150,8 +150,8 @@ function groupByEmail<T extends { payerEmail: string }>(items: T[]) {
 
 export async function buildClientPaymentEmails(r: Repo): Promise<AlertEmail[]> {
   const [subs, rent] = await Promise.all([
-    r.listSubscriptions(),
-    r.listRentRecords(),
+    r.listSubscriptions(""),
+    r.listRentRecords(""),
   ]);
 
   const expiringSubs = subs.filter((s) => s.status === "active" && isWithinNextDays(s.renewalDate, 7));

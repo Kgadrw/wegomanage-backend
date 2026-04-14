@@ -83,8 +83,7 @@ async function start() {
     repo = sqliteRepo(db);
   }
 
-  // Reset admin login credentials from env (optional).
-  // Useful if you changed credentials and want to set a new known default.
+  // Optional: reset/create a default user from env on startup.
   if (String(process.env.ADMIN_RESET_DEFAULT || "").toLowerCase() === "true") {
     const email = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
     const password = (process.env.ADMIN_PASSWORD || "").trim();
@@ -92,15 +91,16 @@ async function start() {
       // eslint-disable-next-line no-console
       console.warn("ADMIN_RESET_DEFAULT=true but ADMIN_EMAIL/ADMIN_PASSWORD are not set");
     } else {
+      const existing = await repo.getUserByEmail(email);
       const salt = randomUUID();
       const hash = hashPassword(password, salt);
-      await Promise.all([
-        repo.setSetting("admin_email", email),
-        repo.setSetting("admin_password_salt", salt),
-        repo.setSetting("admin_password_hash", hash),
-      ]);
+      if (!existing) {
+        await repo.createUser({ email, passwordSalt: salt, passwordHash: hash });
+      } else {
+        await repo.updateUserCredentials(existing.id, { passwordSalt: salt, passwordHash: hash, email });
+      }
       // eslint-disable-next-line no-console
-      console.log("Admin login credentials reset from env");
+      console.log("Default user credentials reset from env");
     }
   }
 
@@ -111,8 +111,14 @@ async function start() {
   // Protect all API routes except login.
   app.use((req, res, next) => {
     if (!req.path.startsWith("/api")) return next();
-    if (req.path === "/api/auth/login") return next();
-    return requireAuth(req, res, next);
+    if (
+      req.path === "/api/auth/login" ||
+      req.path === "/api/auth/register" ||
+      req.path === "/api/auth/refresh" ||
+      req.path === "/api/auth/forgot-password" ||
+      req.path === "/api/auth/reset-password"
+    ) return next();
+    return requireAuth(repo, req, res, next);
   });
 
   registerRoutes(app, repo);
